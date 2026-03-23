@@ -2,27 +2,28 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
-
 import torch
+from typing import Any, Dict
 
 
 class TERAdapter:
-    """Adapt standardized samples to TER-style training dictionaries."""
-
     def __call__(self, sample: Dict[str, Any]) -> Dict[str, Any]:
-        mask_values = list(sample.get("mask", {}).values())
+        mod_keys = ["mod1", "mod2"]
+
+        modalities = sample.get("modalities", {})
+        mask_dict = sample.get("mask", {})
+
+        mask_values = [mask_dict.get(k, 0) for k in mod_keys]
+
         return {
-            "mod1": sample["modalities"].get("mod1"),
-            "mod2": sample["modalities"].get("mod2"),
+            "mod1": modalities.get("mod1"),
+            "mod2": modalities.get("mod2"),
             "mask": torch.tensor(mask_values, dtype=torch.float32),
             "label": sample.get("target"),
         }
 
 
 class ClinGenAdapter:
-    """Adapt standardized samples to ClinGen-style dictionaries."""
-
     def __call__(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "inputs": sample.get("modalities", {}),
@@ -33,8 +34,13 @@ class ClinGenAdapter:
 
 
 class FuseMoEAdapter:
-    """Adapt standardized samples to simple tuple outputs."""
-
     def __call__(self, sample: Dict[str, Any]):
         mods = sample.get("modalities", {})
-        return mods.get("mod1"), mods.get("mod2")
+
+        x1 = mods.get("mod1")
+        x2 = mods.get("mod2")
+
+        if x1 is None or x2 is None:
+            raise ValueError("FuseMoEAdapter requires both modalities")
+
+        return x1, x2

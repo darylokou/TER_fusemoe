@@ -7,11 +7,15 @@ This module builds a vitals/labs long-format DataFrame with columns expected by
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
+import torch
+from torch.utils.data import Dataset
 
+from src.preprocessing.adapters import TERAdapter
 from src.preprocessing.mimic_iv_pipeline import MIMICIVPipeline, VitalsLabsExtractor
+from src.preprocessing.pipeline import MaskGenerator, PreprocessingPipeline
 
 PathLike = Union[str, Path]
 
@@ -171,3 +175,66 @@ def build_demo_pipeline_output(
         raw_batch["labels"] = labels_df["label"].astype("float32").to_numpy()
 
     return pipeline.build(raw_batch)
+
+
+class MimicDataset(Dataset):
+    """Dataset wrapper with modular loading, preprocessing, and output adaptation."""
+
+    def __init__(
+        self,
+        mod1_data: Sequence[Any],
+        mod2_data: Optional[Sequence[Any]] = None,
+        targets: Optional[Sequence[Any]] = None,
+        metadata: Optional[Sequence[Dict[str, Any]]] = None,
+        pipeline: Optional[PreprocessingPipeline] = None,
+        adapter: Optional[Any] = None,
+    ):
+        self.mod1_data = mod1_data
+        self.mod2_data = mod2_data
+        self.targets = targets
+        self.metadata = metadata
+
+        self.pipeline = pipeline if pipeline is not None else PreprocessingPipeline([MaskGenerator()])
+        self.adapter = adapter if adapter is not None else TERAdapter()
+
+    def __len__(self) -> int:
+        return len(self.mod1_data)
+
+    def _maybe_tensor(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if torch.is_tensor(value):
+            return value
+        return torch.as_tensor(value)
+
+    def load_raw(self, idx: int) -> Dict[str, Any]:
+        mod1 = self._maybe_tensor(self.mod1_data[idx])
+        mod2 = None
+        if self.mod2_data is not None:
+            mod2 = self._maybe_tensor(self.mod2_data[idx])
+
+        target = None
+        if self.targets is not None:
+            target = self._maybe_tensor(self.targets[idx])
+
+        meta: Dict[str, Any] = {"index": idx}
+        if self.metadata is not None:
+            meta.update(dict(self.metadata[idx]))
+
+        return {
+            "modalities": {"mod1": mod1, "mod2": mod2},
+            "mask": {},
+            "target": target,
+            "metadata": meta,
+        }
+
+    def __getitem__(self, idx: int):
+        sample = self.load_raw(idx)
+
+        if self.pipeline:
+            sample = self.pipeline(sample)
+
+        if self.adapter:
+            sample = self.adapter(sample)
+
+        return sample
